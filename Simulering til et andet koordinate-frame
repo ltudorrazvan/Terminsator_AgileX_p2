@@ -1,0 +1,42 @@
+import roboticstoolbox as rtb
+from roboticstoolbox import DHRobot, RevoluteMDH
+import numpy as np
+from spatialmath import SE3
+
+class AgileXPiper(DHRobot):
+    def __init__(self):
+        d1 = 123 / 1000
+        a3 = 285.03 / 1000
+        d4 = 250.75 / 1000
+        a4 = -21.98 / 1000
+        a6 = 91 / 1000
+        L = [
+                RevoluteMDH(a=0, alpha=0, d=d1, offset= 0),                    #joint 1
+                RevoluteMDH(a=0, alpha=-np.pi/2, d=0, offset=-172.22/180*np.pi),  #joint 2
+                RevoluteMDH(a=a3, alpha=0, d=0, offset=-102.78/180*np.pi),         #joint 3
+                RevoluteMDH(a=a4, alpha=np.pi/2, d=d4, offset= 0),                #joint 4
+                RevoluteMDH(a=0, alpha=-np.pi/2, d=0, offset=0),                  #joint 5
+                RevoluteMDH(a=a6, alpha=np.pi/2, d=0, offset=0),                  #joint 6
+            ]
+
+        super().__init__(
+            L,
+            name ='Piper',
+        )
+
+robot = AgileXPiper()
+print(robot)
+#Tell the robot, which position it shopuld be in and how it should orient itself.
+pos1 = SE3.Trans(30.0 , 30.0, 10.0,) * SE3.OA([0,1,0], [0,0,-1])
+#Calculate inverse kinematics for the given position and orientation
+solp1 = robot.ik_LM(pos1)
+print(solp1)
+
+#Show that the forward kinematics reaches the desired end pose of the end effector
+q1_pickup = solp1[0]
+print(robot.fkine(q1_pickup))
+#Create a plot of this movement
+qt1 = rtb.jtraj(np.zeros(6), q1_pickup, 50)
+robot.plot(qt1.q, backend ='pyplot', movie ='piper_pickup.gif', block = True, limits = [0,0.45,0,0.45,0,0.45])
+# Drag sliders to move each joint
+#robot.teach(np.array([0, 0, 0, 0, 0, 0]))
