@@ -1,0 +1,325 @@
+"""
+Analytical Inverse Kinematics for the Agilex Piper 6-DOF Robotic Arm.
+Now with joint-limit filtering, angle wrapping, and smart solution selection.
+
+Brug:
+    Sæt target position, target orientation, og evt. robottens nuværende
+    vinkler nederst i filen, og kør:  python piper_ik_final.py
+"""
+
+import numpy as np
+
+# ============================================================================
+# ROBOT CONSTANTS (modified DH parameters)
+# ============================================================================
+d1 = 0.123
+a3 = 0.28503
+a4 = -0.02198
+d4 = 0.25075
+d6 = 0.091
+
+theta2_offset = -172.22 * np.pi / 180
+theta3_offset = -102.78 * np.pi / 180
+
+# Pipers ledgrænser (fra brugermanual / SDK).
+# Bemærk især: J2 kan KUN bevæge sig positivt.
+PIPER_LIMITS = [
+    (-2.687, 2.687),     # J1: ±154°
+    (0.0,    3.403),     # J2: 0° til 195°  -- KUN POSITIV!
+    (-3.054, 0.0),       # J3: -175° til 0°
+    (-1.850, 1.850),     # J4: ±106°
+    (-1.309, 1.309),     # J5: ±75°
+    (-1.745, 1.745),     # J6: ±100°
+]
+
+
+def wrap(angle):
+    """Wrap til (-pi, pi]."""
+    return (angle + np.pi) % (2 * np.pi) - np.pi
+
+
+# ============================================================================
+# FORWARD KINEMATICS
+# ============================================================================
+def dh_transform(alpha, a, d, theta):
+    ca, sa = np.cos(alpha), np.sin(alpha)
+    ct, st = np.cos(theta), np.sin(theta)
+    return np.array([
+        [ct,     -st,     0,    a    ],
+        [st*ca,  ct*ca,  -sa,  -sa*d ],
+        [st*sa,  ct*sa,   ca,   ca*d ],
+        [0,      0,       0,    1    ],
+    ])
+
+
+def forward_kinematics(thetas):
+    """Fuld T06 fra 6 ledvariable; DH offsets indlæres internt."""
+    t1, t2, t3, t4, t5, t6 = thetas
+    T01 = dh_transform(0,        0,    d1, t1)
+    T12 = dh_transform(-np.pi/2, 0,    0,  t2 + theta2_offset)
+    T23 = dh_transform(0,        a3,   0,  t3 + theta3_offset)
+    T34 = dh_transform(np.pi/2,  a4,   d4, t4)
+    T45 = dh_transform(-np.pi/2, 0,    0,  t5)
+    T56 = dh_transform(np.pi/2,  0,    d6, t6)
+    return T01 @ T12 @ T23 @ T34 @ T45 @ T56
+
+
+def compute_T03(t1, t2, t3):
+    T01 = dh_transform(0,        0,  d1, t1)
+    T12 = dh_transform(-np.pi/2, 0,  0,  t2 + theta2_offset)
+    T23 = dh_transform(0,        a3, 0,  t3 + theta3_offset)
+    return T01 @ T12 @ T23
+
+
+def compute_T01(t1):
+    return dh_transform(0, 0, d1, t1)
+
+
+# ============================================================================
+# INVERSE KINEMATICS
+# ============================================================================
+def inverse_kinematics(p_d, R_d):
+    """
+    Givet target position p_d og 3x3 rotationsmatrix R_d, returnér alle
+    led-løsninger (op til 8), hver en tuple (t1, t2, t3, t4, t5, t6).
+    """
+    p_d = np.asarray(p_d, dtype=float)
+    R_d = np.asarray(R_d, dtype=float)
+
+    p_w = p_d - d6 * R_d[:, 2]
+
+    solutions = []
+
+    t1_a = np.arctan2(p_w[1], p_w[0])
+    for theta1 in (t1_a, t1_a + np.pi):
+
+        T01 = compute_T01(theta1)
+        p_w_f1 = np.linalg.inv(T01) @ np.append(p_w, 1.0)
+        x1, y1, z1 = p_w_f1[:3]
+        if abs(y1) > 1e-6:
+            continue
+
+        A = x1
+        B = -z1
+        C = (x1**2 + z1**2 + a3**2 - a4**2 - d4**2) / (2 * a3)
+        norm_AB = np.hypot(A, B)
+        if norm_AB < 1e-12 or abs(C / norm_AB) > 1:
+            continue
+        phi_ab = np.arctan2(B, A)
+        base = np.arccos(np.clip(C / norm_AB, -1, 1))
+
+        for sign_u in (+1, -1):
+            u = phi_ab + sign_u * base
+
+            M = np.array([[d4, a4], [-a4, d4]])
+            rhs = np.array([x1 - a3*np.cos(u), z1 + a3*np.sin(u)])
+            sinS, cosS = np.linalg.solve(M, rhs)
+            S = np.arctan2(sinS, cosS)
+            v = wrap(S - u)
+
+            theta2 = u - theta2_offset          # wrap() must NOT be used here: J2 range (0, 3.403) exceeds π
+            theta3 = wrap(v - theta3_offset)
+
+            T03 = compute_T03(theta1, theta2, theta3)
+            R03 = T03[:3, :3]
+            R36 = R03.T @ R_d
+
+            cos_t5 = -R36[1, 2]
+            sin_sq = R36[0, 2]**2 + R36[2, 2]**2
+
+            if sin_sq < 1e-12:
+                theta5 = 0.0 if cos_t5 > 0 else np.pi
+                theta4 = 0.0
+                theta6 = np.arctan2(-R36[0, 1], R36[0, 0])
+                solutions.append((wrap(theta1), theta2, theta3,
+                                   wrap(theta4), wrap(theta5), wrap(theta6)))
+                continue
+
+            for sign_s5 in (+1, -1):
+                sin_t5 = sign_s5 * np.sqrt(sin_sq)
+                theta5 = np.arctan2(sin_t5, cos_t5)
+                theta4 = np.arctan2(R36[2, 2] / sin_t5, R36[0, 2] / sin_t5)
+                theta6 = np.arctan2(-R36[1, 1] / sin_t5, R36[1, 0] / sin_t5)
+                solutions.append((wrap(theta1), theta2, theta3,
+                                   wrap(theta4), wrap(theta5), wrap(theta6)))
+
+    return solutions
+
+
+def verify_and_filter(solutions, p_d, R_d, tol=1e-4):
+    """Behold kun løsninger hvor FK reproducerer target."""
+    good = []
+    for sol in solutions:
+        T = forward_kinematics(sol)
+        p_err = np.linalg.norm(T[:3, 3] - p_d)
+        R_err = np.linalg.norm(T[:3, :3] - R_d)
+        if p_err < tol and R_err < tol:
+            good.append((sol, p_err, R_err))
+    return good
+
+
+# ============================================================================
+# JOINT LIMITS & SOLUTION SELECTION
+# ============================================================================
+def in_joint_limits(sol, limits=PIPER_LIMITS, tol=1e-3):
+    """Tjek om alle led ligger inden for grænser (med en lille tolerance)."""
+    for s, (lo, hi) in zip(sol, limits):
+        if s < lo - tol or s > hi + tol:
+            return False
+    return True
+
+
+def filter_by_limits(solutions, limits=PIPER_LIMITS):
+    """Returnér kun de løsninger der overholder ledgrænser."""
+    return [sol for sol in solutions if in_joint_limits(sol, limits)]
+
+
+def pick_best_solution(solutions, current_angles=None, limits=PIPER_LIMITS):
+    """
+    Vælg den bedste IK-løsning:
+    1. Filtrér løsninger der overtræder ledgrænser.
+    2. Hvis current_angles er givet: vælg den tættest på (mindst bevægelse).
+    3. Ellers: returnér første gyldige løsning.
+    
+    Returnerer None hvis ingen løsning er gyldig.
+    """
+    valid = filter_by_limits(solutions, limits)
+    if not valid:
+        return None
+
+    if current_angles is None:
+        return np.array(valid[0])
+
+    current = np.array(current_angles)
+    # Brug wrappet differens, så vi sammenligner reelle vinkelafstande
+    def joint_distance(sol):
+        diff = wrap(np.array(sol) - current)
+        return np.linalg.norm(diff)
+
+    return np.array(min(valid, key=joint_distance))
+
+
+def rpy_to_R(roll, pitch, yaw):
+    """R = Rz(yaw) * Ry(pitch) * Rx(roll). NB: Tjek konvention mod din simulator."""
+    cr, sr = np.cos(roll), np.sin(roll)
+    cp, sp = np.cos(pitch), np.sin(pitch)
+    cy, sy = np.cos(yaw), np.sin(yaw)
+    Rx = np.array([[1,0,0],[0,cr,-sr],[0,sr,cr]])
+    Ry = np.array([[cp,0,sp],[0,1,0],[-sp,0,cp]])
+    Rz = np.array([[cy,-sy,0],[sy,cy,0],[0,0,1]])
+    return Rz @ Ry @ Rx
+
+
+# ============================================================================
+# HØJ-NIVEAU FUNKTION: bare giv mig én løsning
+# ============================================================================
+def solve_ik(p_d, R_d, current_angles=None, verbose=True):
+    """
+    Komplet IK-pipeline: matematisk løsning + verifikation + filtrering + valg.
+    Returnerer den bedste gyldige ledkonfiguration, eller None.
+    """
+    raw = inverse_kinematics(p_d, R_d)
+    good = verify_and_filter(raw, p_d, R_d)
+    sols = [s for s, _, _ in good]
+    
+    if verbose:
+        print(f"  IK genererede {len(raw)} kandidater, {len(sols)} verificerede.")
+
+    valid = filter_by_limits(sols)
+    if verbose:
+        print(f"  {len(valid)} løsninger respekterer ledgrænser.")
+    
+    if not valid:
+        if verbose:
+            print("  ADVARSEL: Ingen gyldig løsning! Pose er enten uden for "
+                  "rækkevidde eller kræver overtrædelse af ledgrænser.")
+            print("  Alle verificerede løsninger (overtræder mindst én grænse):")
+            for i, sol in enumerate(sols):
+                viol = []
+                for j, (s, (lo, hi)) in enumerate(zip(sol, PIPER_LIMITS), 1):
+                    if s < lo or s > hi:
+                        viol.append(f"J{j}={np.degrees(s):.1f}°")
+                print(f"    {i+1}: overtrædelser: {', '.join(viol) if viol else 'ingen'}")
+        return None
+
+    chosen = pick_best_solution(sols, current_angles=current_angles)
+    if verbose:
+        print(f"  Valgt løsning (deg): {np.degrees(chosen).round(2)}")
+    return chosen
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
+if __name__ == "__main__":
+    # ---- Self-test: round-trip 200 tilfældige konfigurationer ----
+    print("="*70)
+    print("SELF-TEST: 200 tilfældige konfigurationer (FK→IK→FK)")
+    print("="*70)
+    np.random.seed(42)
+    n_total = 200
+    n_ok = 0
+    errs = []
+    for _ in range(n_total):
+        # Samples inden for ledgrænser
+        theta_true = np.array([
+            np.random.uniform(lo, hi) for (lo, hi) in PIPER_LIMITS
+        ])
+        T = forward_kinematics(theta_true)
+        raw = inverse_kinematics(T[:3, 3], T[:3, :3])
+        good = verify_and_filter(raw, T[:3, 3], T[:3, :3])
+        if good:
+            n_ok += 1
+            errs.append(min(g[1] for g in good))
+    if errs:
+        print(f"{n_ok}/{n_total} løsbare. Max fejl: {max(errs):.2e} m, "
+              f"middel: {np.mean(errs):.2e} m\n")
+
+    # ============================================================
+    # DIN MÅL-POSE - REDIGÉR HER
+    # ============================================================
+    print("="*70)
+    print("LØS DIN MÅL-POSE")
+    print("="*70)
+
+    # Position (meter)
+    target_position = [0.30, 0.30, 0.20]
+
+    # Orientering - to muligheder:
+    # (A) Specificér rotationsmatrix direkte (ingen RPY-konventionsforvirring):
+    # target_R = np.array([
+    #     [1,  0,  0],
+    #     [0, -1,  0],
+    #     [0,  0, -1],   # tool z-akse peger ned -- VIRKER KUN ved y≈0
+    # ])
+
+    # (B) RPY -- brug yaw=π ved y≠0 for at holde J6 inden for ±100°:
+    roll, pitch, yaw = 0.0, -np.pi, 0.0
+    target_R = rpy_to_R(roll, pitch, yaw)
+
+    # Robottens NUVÆRENDE vinkler - så vi vælger løsningen tættest på
+    # (sæt None hvis ukendt)
+    current_angles = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # current_angles = None
+    # ============================================================
+
+    print(f"Target position: {target_position}")
+    print(f"Target rotation:\n{np.round(target_R, 4)}")
+    if current_angles is not None:
+        print(f"Current angles (deg): {np.degrees(current_angles).round(2)}")
+    print()
+
+    chosen = solve_ik(target_position, target_R,
+                       current_angles=current_angles, verbose=True)
+
+    if chosen is not None:
+        print("\n" + "="*70)
+        print("RESULTAT")
+        print("="*70)
+        print(f"Send disse ledvinkler til robotten:")
+        print(f"  rad: {chosen.round(4)}")
+        print(f"  deg: {np.degrees(chosen).round(2)}")
+        # Verificér FK
+        T_check = forward_kinematics(chosen)
+        print(f"\nFK af valgt løsning:")
+        print(f"  position: {T_check[:3,3].round(4)}  (target: {np.array(target_position).round(4)})")
