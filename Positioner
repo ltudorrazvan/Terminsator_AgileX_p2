@@ -12,20 +12,20 @@ if __name__ == "__main__":
         time.sleep(2)
 
 #UDEN GRIPPER
-#                     X,     Y,       Z
-# Incubator C:       401509, 0,       117565
-# Lid Placeholder:   410116, -121342, 42698
-# BI placeholder a1: 403067, 228322,  36986
-# BI placeholder a2: 400885, 202658,  38264
-# BI placeholder a3: 403653, 178255,  38397
-# Inspection tray:   362523, -234734, 8508
+#NAME                 X:        Y:        Z:
+#BI HOLDER A          206826    217232    52519
+#BI HOLDER B          207058    194666    53485
+#BI HOLDER C          205975    167268    56474
+#INCUBATOR LID CENTER 201518     -6377   135477
+#HOLDER LID CENTER    205722   -130329    57712
+#INSPECTION TRAY      205722   -246124    25531
 
 #MED GRIPPER
 #                     X,     Y,       Z
-# Incubator C:       401565, 3330,    226730
-# Lid Placeholder:   406798, -118486, 158085
-# BI placeholder a1: 405844, 230034,  152908
-# BI placeholder a2: 405678, 203196,  1524040
-# BI placeholder a3: 410199, 179742,  147474
-# Inspection tray:   364759, -256341, 191345
-# BI side position klokken 21: 405180,  34506   205590 ----- 90 grader 404922,  33772,  205589
+# Incubator C:       
+# Lid Placeholder:   
+# BI placeholder a1: 
+# BI placeholder a2:
+# BI placeholder a3: 
+# Inspection tray:   
+
