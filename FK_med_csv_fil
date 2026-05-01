@@ -1,0 +1,121 @@
+import time
+import csv
+from piper_sdk import *
+import numpy as np
+
+log_counter = 1
+# --- JUSTER HASTIGHED HER (0-100+) ---
+speed = 50 
+
+if __name__ == "__main__":
+    piper = C_PiperInterface_V2("can0")
+    piper.ConnectPort()
+    while not piper.EnablePiper():
+        time.sleep(0.01)
+
+    factor = 57295.7795  # 1000*180/pi
+    position = [0, 0, 0, 0, 0, 0]
+    count = 0
+
+    # -------------------------------------------------
+    # CSV setup
+    # -------------------------------------------------
+    csv_filename = "piper_fk_ik_validation.csv"
+    with open(csv_filename, mode="w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow([
+            "ID", "q1_rad", "q2_rad", "q3_rad", "q4_rad", "q5_rad", "q6_rad",
+            "x", "y", "z", "Rx", "Ry", "Rz"
+        ])
+
+    print("CSV-fil oprettet:", csv_filename)
+
+    def log_to_csv(q, pose):
+        global log_counter
+        with open(csv_filename, mode="a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow([
+                log_counter,
+                round(q[0], 6), round(q[1], 6), round(q[2], 6),
+                round(q[3], 6), round(q[4], 6), round(q[5], 6),
+                round(pose[0], 6), round(pose[1], 6), round(pose[2], 6),
+                round(pose[3], 6), round(pose[4], 6), round(pose[5], 6)
+            ])
+        log_counter += 1
+
+    # -------------------------------------------------
+    # Main loop
+    # -------------------------------------------------
+    while True:
+        count += 1
+        log_now = False
+
+        if count == 1:
+            print("Pos 1 -----------")
+            position = [0,0,0,0,0,0]
+            log_now = True
+        if count == 300:
+            print("Pos 2 -----------")
+            position = [2.3562,   2.2494,  -1.5430  ,  0.0000  ,  0.9517 ,   2.3562]
+            log_now = True
+        elif count == 600:
+            print("Pos 3 -----------")
+            position = [0.7854, 2.2494 ,-1.543 ,  0.   ,   0.9517 , 0.7854]
+            log_now = True
+        elif count == 900:
+            print("Pos 4 -----------")
+            position = [-0.7854,  2.2494, -1.543,   0.  ,    0.9517, -0.7854]
+            log_now = True
+        elif count == 1200:
+            print("Pos 5 -----------")
+            position = [-2.3562,  2.2494, -1.5430, 0.0000,   0.9517,   -2.3562]
+            log_now = True
+        elif count == 1500:
+            print("Pos 6 -----------")
+            position = [-2.3562,    2.0134,   -1.2135,   -0.0000,    0.0727,   -3.1416]
+            log_now = True
+        elif count == 1800:
+            print("Pos 7 -----------")
+            position = [-0.7854, 2.0134, -1.2135, -0.0, 0.0727, 0.0]
+            log_now = True
+        elif count == 2100:
+            print("Pos 8 -----------")
+            position = [0.7854, 2.0134, -1.2135, -0.0, 0.0727, 0.0]
+            log_now = True
+        elif count == 2400:
+            print("Pos 9 -----------")
+            position = [2.3562,  2.0134,   -1.2135,    0.0000,    0.0727,    3.1416]
+            log_now = True
+        elif count == 2700:
+            print("Pos 10 -----------")
+            position = [45*np.pi/180, 0, 0, 0, 0, 0]
+            log_now = True
+            count = 0
+
+        # Konverter til robot-enheder
+        joint_0 = round(position[0] * factor)
+        joint_1 = round(position[1] * factor)
+        joint_2 = round(position[2] * factor)
+        joint_3 = round(position[3] * factor)
+        joint_4 = round(position[4] * factor)
+        joint_5 = round(position[5] * factor)
+
+        # Her bruges variablen 'speed'
+        piper.MotionCtrl_2(0x01, 0x01, speed, 0x00)
+        piper.JointCtrl(joint_0, joint_1, joint_2,
+                        joint_3, joint_4, joint_5)
+
+        if log_now:
+            time.sleep(2)  # Øget tid lidt så den når at stoppe helt ved lavere fart
+            tcp_pose = piper.GetArmEndPoseMsgs()
+            tcp_position = [tcp_pose.end_pose.X_axis,
+                tcp_pose.end_pose.Y_axis,
+                tcp_pose.end_pose.Z_axis,
+                tcp_pose.end_pose.RX_axis,
+                tcp_pose.end_pose.RY_axis,
+                tcp_pose.end_pose.RZ_axis]
+            log_to_csv(position, tcp_position)
+            print(f"Logget nr {log_counter-1}")
+            time.sleep(1)
+
+        time.sleep(0.005)
