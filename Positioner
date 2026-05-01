@@ -1,0 +1,31 @@
+import time
+from piper_sdk import *
+
+if __name__ == "__main__":
+    piper = C_PiperInterface_V2("can0")
+    piper.ConnectPort()
+    while( not piper.EnablePiper()):
+        time.sleep(0.01)
+
+    while True:
+        print(piper.GetArmEndPoseMsgs())
+        time.sleep(2)
+
+#UDEN GRIPPER
+#                     X,     Y,       Z
+# Incubator C:       401509, 0,       117565
+# Lid Placeholder:   410116, -121342, 42698
+# BI placeholder a1: 403067, 228322,  36986
+# BI placeholder a2: 400885, 202658,  38264
+# BI placeholder a3: 403653, 178255,  38397
+# Inspection tray:   362523, -234734, 8508
+
+#MED GRIPPER
+#                     X,     Y,       Z
+# Incubator C:       401565, 3330,    226730
+# Lid Placeholder:   406798, -118486, 158085
+# BI placeholder a1: 405844, 230034,  152908
+# BI placeholder a2: 405678, 203196,  1524040
+# BI placeholder a3: 410199, 179742,  147474
+# Inspection tray:   364759, -256341, 191345
+# BI side position klokken 21: 405180,  34506   205590 ----- 90 grader 404922,  33772,  205589
