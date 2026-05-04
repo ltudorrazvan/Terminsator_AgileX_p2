@@ -233,13 +233,18 @@ def solve_ik(p_d, R_d, current_angles=None, verbose=True):
         if verbose:
             print("  ADVARSEL: Ingen gyldig løsning! Pose er enten uden for "
                   "rækkevidde eller kræver overtrædelse af ledgrænser.")
-            print("  Alle verificerede løsninger (overtræder mindst én grænse):")
+            print("  Alle verificerede løsninger:")
+            header = f"  {'#':>3}  {'J1':>8}  {'J2':>8}  {'J3':>8}  {'J4':>8}  {'J5':>8}  {'J6':>8}    Overtrædelser"
+            print(header)
+            print("  " + "-" * (len(header) - 2))
             for i, sol in enumerate(sols):
                 viol = []
                 for j, (s, (lo, hi)) in enumerate(zip(sol, PIPER_LIMITS), 1):
                     if s < lo or s > hi:
-                        viol.append(f"J{j}={np.degrees(s):.1f}°")
-                print(f"    {i+1}: overtrædelser: {', '.join(viol) if viol else 'ingen'}")
+                        viol.append(f"J{j}={s:.4f} rad (limit {np.degrees(lo):.0f}°..{np.degrees(hi):.0f}°)")
+                viol_str = ", ".join(viol) if viol else "ingen"
+                print(f"  {i+1:>3}  {sol[0]:>8.4f}  {sol[1]:>8.4f}  {sol[2]:>8.4f}"
+                      f"  {sol[3]:>8.4f}  {sol[4]:>8.4f}  {sol[5]:>8.4f}    {viol_str}")
         return None
 
     chosen = pick_best_solution(sols, current_angles=current_angles)
@@ -283,7 +288,7 @@ if __name__ == "__main__":
     print("="*70)
 
     # Position (meter)
-    target_position = [0.30, 0.30, 0.20]
+    target_position = [ 0.20, 0.00 ,0.30 ]
 
     # Orientering - to muligheder:
     # (A) Specificér rotationsmatrix direkte (ingen RPY-konventionsforvirring):
@@ -294,7 +299,7 @@ if __name__ == "__main__":
     # ])
 
     # (B) RPY -- brug yaw=π ved y≠0 for at holde J6 inden for ±100°:
-    roll, pitch, yaw = 0.0, -np.pi, 0.0
+    roll, pitch, yaw = 0.0, np.pi/2, 0
     target_R = rpy_to_R(roll, pitch, yaw)
 
     # Robottens NUVÆRENDE vinkler - så vi vælger løsningen tættest på
@@ -317,7 +322,7 @@ if __name__ == "__main__":
         print("RESULTAT")
         print("="*70)
         print(f"Send disse ledvinkler til robotten:")
-        print(f"  rad: {chosen.round(4)}")
+        print(f"  rad: {', '.join(map(str, chosen.round(4)))}")
         print(f"  deg: {np.degrees(chosen).round(2)}")
         # Verificér FK
         T_check = forward_kinematics(chosen)
