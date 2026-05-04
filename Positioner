@@ -13,10 +13,13 @@ if __name__ == "__main__":
 
 #UDEN GRIPPER
 #NAME                 X:        Y:        Z:
-#BI HOLDER A          206826    217232    52519
+#BI HOLDER A          205000    217232    52519
 #BI HOLDER B          207058    194666    53485
 #BI HOLDER C          205975    167268    56474
 #INCUBATOR LID CENTER 201518     -6377   135477
+#INCUBATOR BI SLOT 1  234230     -2970   106916
+#INCUBATOR BI SLOT 5  199846    -39283   103393
+#INCUBATOR BI SLOT 10 181518     16529   104471
 #HOLDER LID CENTER    205722   -130329    57712
 #INSPECTION TRAY      205722   -246124    25531
 
@@ -24,8 +27,8 @@ if __name__ == "__main__":
 #                     X,     Y,       Z
 # Incubator C:       
 # Lid Placeholder:   
-# BI placeholder a1: 
-# BI placeholder a2:
-# BI placeholder a3: 
+# BI placeholder a: 
+# BI placeholder b:
+# BI placeholder c: 
 # Inspection tray:   
 
