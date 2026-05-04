@@ -1,0 +1,151 @@
+import time
+import csv
+from piper_sdk import *
+import numpy as np
+
+log_counter = 1
+# --- JUSTER HASTIGHED HER (0-100+) ---
+speed = 15 
+count_constant = 800
+
+
+
+if __name__ == "__main__":
+    piper = C_PiperInterface_V2("can0")
+    piper.ConnectPort()
+    while not piper.EnablePiper():
+        time.sleep(0.01)
+
+    factorRadToDeg = 57295.7795  # 1000*180/pi
+    factorMeterToMicro = 1000000 #fra meter til micrometer
+    position = [0, 0, 0, 0, 0, 0]
+    count = 0
+
+    # -------------------------------------------------
+    # CSV setup
+    # -------------------------------------------------
+    csv_filename = "piper_fk_ik_validation.csv"
+    with open(csv_filename, mode="w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow([
+            "ID", "q1_rad", "q2_rad", "q3_rad", "q4_rad", "q5_rad", "q6_rad",
+            "x", "y", "z", "Rx", "Ry", "Rz"
+        ])
+
+    print("CSV-fil oprettet:", csv_filename)
+
+    def log_to_csv(q, pose):
+        global log_counter
+        with open(csv_filename, mode="a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow([
+                log_counter,
+                round(q[0], 6), round(q[1], 6), round(q[2], 6),
+                round(q[3], 6), round(q[4], 6), round(q[5], 6),
+                round(pose[0], 6), round(pose[1], 6), round(pose[2], 6),
+                round(pose[3], 6), round(pose[4], 6), round(pose[5], 6)
+            ])
+        log_counter += 1
+
+    def piper_joint_movement(jointRadians): # Denne funktion skal bruge vinklen til hvert led i Radianer
+        # Konverter til robot-enheder
+        joint_0 = round(jointRadians[0] * factorRadToDeg)
+        joint_1 = round(jointRadians[1] * factorRadToDeg)
+        joint_2 = round(jointRadians[2] * factorRadToDeg)
+        joint_3 = round(jointRadians[3] * factorRadToDeg)
+        joint_4 = round(jointRadians[4] * factorRadToDeg)
+        joint_5 = round(jointRadians[5] * factorRadToDeg)
+
+        print(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
+
+        # Her udføres bevægelsen
+        piper.MotionCtrl_2(0x01, 0x01, speed, 0x00)
+        piper.JointCtrl(joint_0, joint_1, joint_2,
+                        joint_3, joint_4, joint_5)
+    
+    def piper_linear_movement(XYZRPY6): # Denne funktion skal bruge X, Y, Z (i meter), og R, P, Y (i Radianer) og joint_6 (i Radianer)
+        # linear bevægelser er meget langsommere end joint bevægelser, derfor ændres den lokalt:            # Scalere hastigheden op
+        # konverterer til robot-enheder
+        X = round(XYZRPY6[0]*factorMeterToMicro)
+        Y = round(XYZRPY6[1]*factorMeterToMicro)
+        Z = round(XYZRPY6[2]*factorMeterToMicro)
+        RX = round(XYZRPY6[3]*factorRadToDeg)
+        RY = round(XYZRPY6[4]*factorRadToDeg)
+        RZ = round(XYZRPY6[5]*factorRadToDeg)
+        joint_6 = round(XYZRPY6[6]*factorRadToDeg)
+
+        print(X,Y,Z,RX,RY,RZ)
+
+        # Her udføres bevægelsen
+        piper.MotionCtrl_2(0x01, 0x02, speed, 0x00)
+        piper.EndPoseCtrl(X,Y,Z,RX,RY,RZ)
+        piper.GripperCtrl(abs(joint_6), 1000, 0x01, 0)
+
+        # sætter speed tilbage til det originale.
+
+    # -------------------------------------------------
+    # Main loop
+    # -------------------------------------------------
+    while True:
+        count += 1
+        log_now = False
+
+        if count == count_constant*1:
+            print("Pos 1 -----------")
+            position = [0.0, 0.9139, -0.6589, 0.0, -0.1678, 0.0] # Home Position
+            piper_joint_movement(position)
+            log_now = True
+        if count == count_constant*2:
+            print("Pos 2 -----------") #(0.206826, 0.217232, 0.18, 0, np.pi, 0)
+            position = [0.8099, 1.6641, -1.1255, 0.0, 1.1195, 0.8099] # Approach BI holder
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*3:
+            print("Pos 3 -----------")
+            position = [0.205, 0.217232, 0.16, -3.129043736, 0, 1.538315749, 0] # Grip Position om BI A i Holder
+            piper_linear_movement(position)
+            log_now = True
+        elif count == count_constant*4:
+            print("Pos 4 -----------")
+            position = [0.205, 0.217232, 0.205575, -3.129043736, 0, 1.538315749, 0] # Lift Position af BI A holder
+            piper_linear_movement(position)
+            log_now = True
+        elif count == count_constant*5:
+            print("Pos 5 -----------")
+            position = []
+            log_now = True
+        elif count == count_constant*6:
+            print("Pos 6 -----------")
+            position = []
+            log_now = True
+        elif count == count_constant*7:
+            print("Pos 7 -----------")
+            position = []
+            log_now = True
+        elif count == count_constant*8:
+            print("Pos 8 -----------")
+            position = []
+            log_now = True
+        elif count == count_constant*9:
+            print("Pos 9 -----------")
+            position = []
+            log_now = True
+        elif count == count_constant*10:
+            print("Pos 10 -----------")
+            position = []
+            log_now = True
+
+        if log_now:
+            time.sleep(2)  # Øget tid lidt så den når at stoppe helt ved lavere fart
+            tcp_pose = piper.GetArmEndPoseMsgs()
+            tcp_position = [tcp_pose.end_pose.X_axis,
+                tcp_pose.end_pose.Y_axis,
+                tcp_pose.end_pose.Z_axis,
+                tcp_pose.end_pose.RX_axis,
+                tcp_pose.end_pose.RY_axis,
+                tcp_pose.end_pose.RZ_axis]
+            log_to_csv(position, tcp_position)
+            print(f"Logget nr {log_counter-1}")
+            time.sleep(1)
+
+        time.sleep(0.005)
