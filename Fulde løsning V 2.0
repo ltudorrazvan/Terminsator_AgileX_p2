@@ -1,0 +1,298 @@
+import time
+import csv
+from piper_sdk import *
+import numpy as np
+
+log_counter = 1
+# --- JUSTER HASTIGHED HER (0-100+) ---
+speed = 8 
+count_constant = 1000
+
+
+
+if __name__ == "__main__":
+    piper = C_PiperInterface_V2("can0")
+    piper.ConnectPort()
+    while not piper.EnablePiper():
+        time.sleep(0.01)
+
+    factorRadToDeg = 57295.7795  # 1000*180/pi
+    factorMeterToMicro = 1000000 #fra meter til micrometer
+    position = [0, 0, 0, 0, 0, 0]
+    count = 0
+
+    # -------------------------------------------------
+    # CSV setup
+    # -------------------------------------------------
+    csv_filename = "Fuld_Løsning_Koordinater"
+    with open(csv_filename, mode="w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow([
+            "ID", "q1_rad", "q2_rad", "q3_rad", "q4_rad", "q5_rad", "q6_rad",
+            "x", "y", "z", "Rx", "Ry", "Rz"
+        ])
+
+    print("CSV-fil oprettet:", csv_filename)
+
+    def log_to_csv(q, pose):
+        global log_counter
+        with open(csv_filename, mode="a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow([
+                log_counter,
+                round(q[0], 6), round(q[1], 6), round(q[2], 6),
+                round(q[3], 6), round(q[4], 6), round(q[5], 6),
+                round(pose[0], 6), round(pose[1], 6), round(pose[2], 6),
+                round(pose[3], 6), round(pose[4], 6), round(pose[5], 6)
+            ])
+        log_counter += 1
+
+    def piper_joint_movement(jointRadians): # Denne funktion skal bruge vinklen til hvert led i Radianer
+        # Konverter til robot-enheder
+        joint_0 = round(jointRadians[0] * factorRadToDeg)
+        joint_1 = round(jointRadians[1] * factorRadToDeg)
+        joint_2 = round(jointRadians[2] * factorRadToDeg)
+        joint_3 = round(jointRadians[3] * factorRadToDeg)
+        joint_4 = round(jointRadians[4] * factorRadToDeg)
+        joint_5 = round(jointRadians[5] * factorRadToDeg)
+
+        print(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
+
+        # Her udføres bevægelsen
+        piper.MotionCtrl_2(0x01, 0x01, speed, 0x00)
+        piper.JointCtrl(joint_0, joint_1, joint_2,
+                        joint_3, joint_4, joint_5)
+    
+    def piper_linear_movement(XYZRPY6): # Denne funktion skal bruge X, Y, Z (i meter), og R, P, Y (i Radianer) og joint_6 (i Radianer)
+   
+        X = round(XYZRPY6[0]*factorMeterToMicro)
+        Y = round(XYZRPY6[1]*factorMeterToMicro)
+        Z = round(XYZRPY6[2]*factorMeterToMicro)
+        RX = round(XYZRPY6[3]*factorRadToDeg)
+        RY = round(XYZRPY6[4]*factorRadToDeg)
+        RZ = round(XYZRPY6[5]*factorRadToDeg)
+        joint_6 = round(XYZRPY6[6]*factorRadToDeg)
+
+        print(X,Y,Z,RX,RY,RZ)
+
+        # Her udføres bevægelsen
+        piper.MotionCtrl_2(0x01, 0x02, speed*3, 0x00)
+        piper.EndPoseCtrl(X,Y,Z,RX,RY,RZ)
+        piper.GripperCtrl(abs(joint_6), 1000, 0x01, 0)
+
+
+    # -------------------------------------------------
+    # Main loop
+    # -------------------------------------------------
+    while True:
+        count += 1
+        log_now = False
+
+        if count == count_constant*1:
+            print("Pos 1 -----------")
+            position = [0.0, 0.9139, -0.6589, 0.0, -0.1678, 0.0] # Home Position
+            piper_joint_movement(position)
+            log_now = True
+        if count == count_constant*2:
+            print("Pos 2 -----------") #(0.206826, 0.217232, 0.22, 0, np.pi, 0)
+            position = [0.8099, 1.6641, -1.1255, 0.0, 1.1195, 0.8099] # Approach BI holder
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*3:
+            print("Pos 3 -----------")
+            position = [0.205, 0.217232, 0.175, -3.129043736, 0, 1.538315749, 0] # Grip Position om BI A i Holder
+            piper_linear_movement(position)
+            log_now = True
+        elif count == count_constant*4:
+            print("Pos 4 -----------")
+            position = [0.205, 0.217232, 0.22, -3.129043736, 0, 1.538315749, 0] # Lift Position af BI A holder
+            piper_linear_movement(position)
+            log_now = True
+        elif count == count_constant*5:
+            print("Pos 5 -----------")
+            position = [-0.0316, 1.2789, -0.8897, 0.0, 1.2689, -0.0316] # Approachpoint above Incubator
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*6:
+            print("Pos 6 -----------")
+            position = [-0.0136, 1.3441, -0.9538, 0.0, 1.2677, -0.0136] # Approachpoint above Incubator Slot 1
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*7:
+            print("Pos 7 -----------")
+            position = [0.23, -0.004, 0.23, 0, np.pi, 0, 0] # Move Down on Incubator Slot 1
+            piper_linear_movement(position)
+            log_now = True
+            time.sleep(2)
+        elif count == count_constant*8:
+            print("Pos 8 -----------")
+            position = [0.23, -0.004, 0.262, 0, np.pi, 0, 0] # Move Up on Incubator Slot 1
+            piper_linear_movement(position)
+            log_now = True
+        elif count == count_constant*9:
+            print("Pos 9 -----------")
+            position = [-0.0316, 1.2789, -0.8897, 0.0, 1.2689, -0.0316] # Approachpoint above Incubator
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*10:
+            print("Pos 10 -----------")
+            position = [-0.5647, 1.4293, -1.026, 0.0, 1.2548, -0.5647] # Approachpoint above Lid Holder
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*11:
+            print("Pos 11 -----------")
+            position = [-0.5555, 1.4867, -0.8744, 0.0, 1.0458, -0.5555] # Lower Approachpoint above Lid Holder
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*12:
+            print("Pos 12 -----------")
+            position = [0.206219, -0.128008, 0.185, -3.129043736, 0, 1.538315749, 0] # Move down to lid holder
+            piper_linear_movement(position)
+            log_now = True
+        elif count == count_constant*13:
+            print("Pos 13 -----------")
+            position = [-0.556, 1.486, -0.8737, 0.0, 1.0458, -0.556] # Approachpoint above Lid Holder 1
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*14:
+            print("Pos 14 -----------")
+            position = [-0.6421, 1.3047, -1.0443, 0.2612, 1.0916, -0.7272] # Approachpoint above Lid Holder 2
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*15:
+            print("Pos 15 -----------")
+            position = [-0.0259, 0.9382, -0.7268, 0.0298, 0.6617, -0.0419] # Approachpoint above Incubator 1
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*16:
+            print("Pos 16 -----------")
+            position = [-0.0342, 1.0893, -0.8672, 0.0071, 1.2398, -0.0359] # Approachpoint above Incubator 2
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*17:
+            print("Pos 17 -----------")
+            position = [-0.0342, 1.0961, -0.7917, 0.0073, 1.1574, -0.0365] # Release above Incubator
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*18:
+            print("Pos 8 -----------")
+            position = [0.0, 0.9139, -0.6589, 0.0, -0.1678, 0.0] # Home Position
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*19:
+            print("Pos 19 -----------")
+            position = [-0.0342, 1.0961, -0.7917, 0.0073, 1.1574, -0.0365] # Approachpoint above Incubator
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*20:
+            print("Pos 20 -----------")
+            position = [-0.0275, 1.2454, -0.8629, 0.0, 1.2756, -0.0275] # Pickup Lid from incubator
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*21:
+            print("Pos 21 -----------")
+            position = [-0.0342, 1.0961, -0.7917, 0.0073, 1.1574, -0.0365] # Release above Incubator
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*22:
+            print("Pos 22 -----------")
+            position = [-0.0342, 1.0893, -0.8672, 0.0071, 1.2398, -0.0359] # Approachpoint above Incubator 2
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*23:
+            print("Pos 23 -----------")
+            position = [-0.0259, 0.9382, -0.7268, 0.0298, 0.6617, -0.0419] # Approachpoint above Incubator 1
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*24:
+            print("Pos 24 -----------")
+            position = [-0.6421, 1.3047, -1.0443, 0.2612, 1.0916, -0.7272] # Approachpoint above Lid Holder 2
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*25:
+            print("Pos 25 -----------")
+            position = [-0.5555, 1.4867, -0.8744, 0.0, 1.0458, -0.5555] # Lower Approachpoint above Lid Holder
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*26:
+            print("Pos 26 -----------")
+            position = [0.206219, -0.128008, 0.185, -3.129043736, 0, 1.538315749, 0] # Move down to lid holder
+            piper_linear_movement(position)
+            log_now = True
+        elif count == count_constant*27:
+            print("Pos 27 -----------")
+            position = [-0.556, 1.486, -0.8737, 0.0, 1.0458, -0.556] # Approachpoint above Lid Holder 1
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*28:
+            print("Pos 28 -----------")
+            position = [-0.6421, 1.3047, -1.0443, 0.2612, 1.0916, -0.7272] # Approachpoint above Lid Holder 2
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*29:
+            print("Pos 29 -----------")
+            position = [-0.0316, 1.2789, -0.8897, 0.0, 1.2689, -0.0316] # Approachpoint above Incubator
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*30:
+            print("Pos 30 -----------")
+            position = [-0.0136, 1.3441, -0.9538, 0.0, 1.2677, -0.0136] # Approachpoint above Incubator Slot 1
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*31:
+            print("Pos 31 -----------")
+            position = [-0.0174, 1.3906, -0.9475, 0.0, 1.215, -0.0174] # Approachpoint above Incubator Slot 2
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*32:
+            print("Pos 32 -----------")
+            position = [0.23, -0.004, 0.23, 0, np.pi, 0, 0] # Move Down on Incubator Slot 1
+            piper_linear_movement(position)
+            log_now = True
+            time.sleep(5)
+        elif count == count_constant*33:
+            print("Pos 33 -----------")
+            position = [0.23, -0.004, 0.273, 0, np.pi, 0, 0] # Move Up on Incubator Slot 1
+            piper_linear_movement(position)
+            log_now = True
+            time.sleep(10)
+        elif count == count_constant*34:
+            print("Pos 34 -----------")
+            position = [-0.0136, 1.3441, -0.9538, 0.0, 1.2677, -0.0136] # Approachpoint above Incubator Slot 1
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*35:
+            print("Pos 35 -----------")
+            position = [-0.0316, 1.2789, -0.8897, 0.0, 1.2689, -0.0316] # Approachpoint above Incubator
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*36:
+            print("Pos 36 -----------")
+            position = [-0.8746, 1.6961, -1.332, 0.0, 1.294, -0.8746] # Approachpoint above Incubator
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*37:
+            print("Pos 37 -----------")
+            position = [-1.0088, 1.6789, -1.0137, 0.0, 0.9928, -1.0088] # Approachpoint above Incubator
+            piper_joint_movement(position)
+            log_now = True
+        elif count == count_constant*38:
+            print("Pos 38 -----------")
+            position = [0.0, 0.9139, -0.6589, 0.0, -0.1678, 0.0] # Home Position
+            piper_joint_movement(position)
+            log_now = True
+
+        if log_now:
+            time.sleep(2)  # Øget tid lidt så den når at stoppe helt ved lavere fart
+            tcp_pose = piper.GetArmEndPoseMsgs()
+            tcp_position = [tcp_pose.end_pose.X_axis,
+                tcp_pose.end_pose.Y_axis,
+                tcp_pose.end_pose.Z_axis,
+                tcp_pose.end_pose.RX_axis,
+                tcp_pose.end_pose.RY_axis,
+                tcp_pose.end_pose.RZ_axis]
+            log_to_csv(position, tcp_position)
+            print(f"Logget nr {log_counter-1}")
+            time.sleep(1)
+
+        time.sleep(0.005)
