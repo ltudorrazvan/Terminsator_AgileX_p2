@@ -13,14 +13,14 @@ if __name__ == "__main__":
 
 #UDEN GRIPPER
 #NAME                 X:        Y:        Z:
-#BI HOLDER A          205000    217232    52519
+#BI HOLDER A          208000    216000   175000     Passer med skruet workspace (+rigtig gripper højde)
 #BI HOLDER B          207058    194666    53485
 #BI HOLDER C          205975    167268    56474
 #INCUBATOR LID CENTER 201518     -6377   135477
-#INCUBATOR BI SLOT 1  234230     -2970   106916
+#INCUBATOR BI SLOT 1  230000     -1624   258480
 #INCUBATOR BI SLOT 5  199846    -39283   103393
 #INCUBATOR BI SLOT 10 181518     16529   104471
-#HOLDER LID CENTER    205722   -130329    57712
+#HOLDER LID CENTER    206219    130000   185000      Passer med skruet Workspace (+rigtig gripper højde)
 #INSPECTION TRAY      205722   -246124    25531
 
 #MED GRIPPER
