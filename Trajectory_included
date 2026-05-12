@@ -372,7 +372,7 @@ if __name__ == "__main__":
 
             # Start = current pos (Pos 2),  end = next target (Pos 3)
             pos_start = [0.0222, 1.4565, -0.9375, 0.0, 1.1391, 1.593] #B1 Insert sample
-            pos_end   = [0.0222, 1.4202, -1.0577, 0.0, 1.2955, 1.59] #B1  Approach
+            pos_end   = [0.0222, 1.4202, -1.0577, 0.0, 1.2955, 1.593] #B1  Approach
 
 
             via_points = np.array([
@@ -706,7 +706,7 @@ if __name__ == "__main__":
         
         elif count == count_constant * 25:
             print("Pos 25 -----------")
-            position = [-0.9601, 1.7088, -1.0975, 0.0, 1.0469, -0.9601] #Sample tray Approach 
+            position = [-0.9601, 1.6696, -1.1747, 0.0, 1.1632, -0.9601] #Sample tray Approach 
             piper_joint_movement(position)
             log_now = True
         # --------------------------------------------------------------------
@@ -771,7 +771,7 @@ if __name__ == "__main__":
             log_now = True
 
           
-        elif count == count_constant * 289:
+        elif count == count_constant * 29:
             print("Pos 29 -----------")
             position = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] #0 position (SLUT)
             piper_joint_movement(position)
