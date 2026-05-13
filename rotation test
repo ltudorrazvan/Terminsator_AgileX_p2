@@ -1,0 +1,341 @@
+import time
+import csv
+import numpy as np
+from piper_sdk import *
+
+# ============================================================================
+# === CONFIGURATION ==========================================================
+# ============================================================================
+
+log_counter = 1
+speed = 8                    # Used by piper_joint_movement (internal motion controller)
+count_constant = 1000
+
+# LSPB streaming parameters
+TRAJ_STREAM_DT = 0.02        # 50 Hz streaming rate (20 ms between commands)
+TRAJ_STREAM_SPEED = 90      # Internal speed limit during streaming (max so it doesn't throttle us)
+
+
+# ============================================================================
+# === LSPB FUNCTIONS =========================================================
+# ============================================================================
+# (Imported from your lspb_6dof.py — copy them here for self-contained file,
+#  or replace this block with: from lspb_6dof import lspb_via_points)
+
+def lspb_via_points(via, segment_durations, max_accel, dt=0.01):
+    """LSPB trajectory through a sequence of joint angles for ONE joint."""
+    via = np.asarray(via, dtype=float)
+    td = np.asarray(segment_durations, dtype=float)
+    n = len(via)
+    assert len(td) == n - 1, "Need n-1 segment durations for n via points"
+
+    v = np.zeros(n - 1)
+    t_b = np.zeros(n)
+    a_signed = np.zeros(n)
+
+    # First via point (start from rest)
+    if abs(via[1] - via[0]) < 1e-12:
+        t_b[0] = 0.0; a_signed[0] = 0.0; v[0] = 0.0
+    else:
+        a_signed[0] = np.sign(via[1] - via[0]) * max_accel
+        disc = td[0]**2 - 2 * (via[1] - via[0]) / a_signed[0]
+        if disc < 0:
+            raise ValueError("Infeasible at first via — increase max_accel or duration")
+        t_b[0] = td[0] - np.sqrt(disc)
+        v[0] = (via[1] - via[0]) / (td[0] - 0.5 * t_b[0])
+
+    # Last via point (decelerate to rest)
+    if abs(via[-1] - via[-2]) < 1e-12:
+        t_b[-1] = 0.0; a_signed[-1] = 0.0; v[-1] = 0.0
+    else:
+        a_signed[-1] = np.sign(via[-2] - via[-1]) * max_accel
+        disc = td[-1]**2 + 2 * (via[-1] - via[-2]) / a_signed[-1]
+        if disc < 0:
+            raise ValueError("Infeasible at last via — increase max_accel or duration")
+        t_b[-1] = td[-1] - np.sqrt(disc)
+        v[-1] = (via[-1] - via[-2]) / (td[-1] - 0.5 * t_b[-1])
+
+    # Intermediate via points
+    for k in range(1, n - 1):
+        v_in = v[0] if k == 1 else (via[k] - via[k - 1]) / td[k - 1]
+        v_out = v[-1] if k == n - 2 else (via[k + 1] - via[k]) / td[k]
+        v[k - 1] = v_in
+        v[k] = v_out
+        if abs(v_out - v_in) < 1e-12:
+            t_b[k] = 0.0; a_signed[k] = 0.0
+        else:
+            a_signed[k] = np.sign(v_out - v_in) * max_accel
+            t_b[k] = (v_out - v_in) / a_signed[k]
+
+    # Linear segment durations
+    t_lin = np.zeros(n - 1)
+    t_lin[0] = td[0] - t_b[0] - 0.5 * t_b[1]
+    t_lin[-1] = td[-1] - t_b[-1] - 0.5 * t_b[-2]
+    for j in range(1, n - 2):
+        t_lin[j] = td[j] - 0.5 * t_b[j] - 0.5 * t_b[j + 1]
+    if any(t_lin < -1e-9):
+        raise ValueError("Blend zones overlap — increase durations or max_accel")
+
+    # Build time grid and evaluate
+    T_total = float(np.sum(td))
+    t = np.arange(0, T_total + dt, dt)
+    theta = np.zeros_like(t)
+    theta_dot = np.zeros_like(t)
+    theta_ddot = np.zeros_like(t)
+    via_times = np.concatenate(([0.0], np.cumsum(td)))
+    blend_start = via_times - t_b / 2
+    blend_end = via_times + t_b / 2
+    blend_start[0] = 0.0
+    blend_end[-1] = T_total
+
+    for i, ti in enumerate(t):
+        in_blend = False
+        for k in range(n):
+            if blend_start[k] <= ti <= blend_end[k]:
+                in_blend = True
+                tau = ti - blend_start[k]
+                v_in = 0.0 if k == 0 else v[k - 1]
+                if k == 0:
+                    theta_at_start = via[0]
+                else:
+                    theta_at_start = (via[k] - v_in * t_b[k] / 2
+                                      - 0.5 * a_signed[k] * (t_b[k] / 2)**2)
+                theta[i] = theta_at_start + v_in * tau + 0.5 * a_signed[k] * tau**2
+                theta_dot[i] = v_in + a_signed[k] * tau
+                theta_ddot[i] = a_signed[k]
+                break
+        if not in_blend:
+            for k in range(n - 1):
+                if blend_end[k] < ti < blend_start[k + 1]:
+                    tau = ti - blend_end[k]
+                    if k == 0:
+                        theta_at_blend_end = via[0] + 0.5 * a_signed[0] * t_b[0]**2
+                    else:
+                        v_in = v[k - 1]
+                        theta_at_blend_end = (via[k] + v_in * t_b[k] / 2
+                                              + 0.5 * a_signed[k] * (t_b[k] / 2)**2)
+                    theta[i] = theta_at_blend_end + v[k] * tau
+                    theta_dot[i] = v[k]
+                    theta_ddot[i] = 0.0
+                    break
+
+    return t, theta, theta_dot, theta_ddot, t_b
+
+
+# ============================================================================
+# === MAIN PROGRAM ===========================================================
+# ============================================================================
+
+if __name__ == "__main__":
+    piper = C_PiperInterface_V2("can0")
+    piper.ConnectPort()
+    while not piper.EnablePiper():
+        time.sleep(0.01)
+
+    factorRadToDeg = 57295.7795       # 1000*180/pi  (rad → milli-degrees)
+    factorMeterToMicro = 1000000      # m → μm
+    position = [0, 0, 0, 0, 0, 0]
+    count = 0
+
+    # ------------------------------------------------------------------------
+    # CSV setup
+    # ------------------------------------------------------------------------
+    csv_filename = "Fuld_Loesning_Koordinater"
+    with open(csv_filename, mode="w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow([
+            "ID", "q1_rad", "q2_rad", "q3_rad", "q4_rad", "q5_rad", "q6_rad",
+            "x", "y", "z", "Rx", "Ry", "Rz"
+        ])
+    print("CSV-fil oprettet:", csv_filename)
+
+    def log_to_csv(q, pose):
+        global log_counter
+        with open(csv_filename, mode="a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow([
+                log_counter,
+                round(q[0], 6), round(q[1], 6), round(q[2], 6),
+                round(q[3], 6), round(q[4], 6), round(q[5], 6),
+                round(pose[0], 6), round(pose[1], 6), round(pose[2], 6),
+                round(pose[3], 6), round(pose[4], 6), round(pose[5], 6)
+            ])
+        log_counter += 1
+
+    # ------------------------------------------------------------------------
+    # Existing single-waypoint movements (unchanged)
+    # ------------------------------------------------------------------------
+    def piper_joint_movement(jointRadians):
+        joint_0 = round(jointRadians[0] * factorRadToDeg)
+        joint_1 = round(jointRadians[1] * factorRadToDeg)
+        joint_2 = round(jointRadians[2] * factorRadToDeg)
+        joint_3 = round(jointRadians[3] * factorRadToDeg)
+        joint_4 = round(jointRadians[4] * factorRadToDeg)
+        joint_5 = round(jointRadians[5] * factorRadToDeg)
+        print(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
+        piper.MotionCtrl_2(0x01, 0x01, speed, 0x00)
+        piper.JointCtrl(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
+
+    def piper_linear_movement(XYZRPY6):
+        X = round(XYZRPY6[0] * factorMeterToMicro)
+        Y = round(XYZRPY6[1] * factorMeterToMicro)
+        Z = round(XYZRPY6[2] * factorMeterToMicro)
+        RX = round(XYZRPY6[3] * factorRadToDeg)
+        RY = round(XYZRPY6[4] * factorRadToDeg)
+        RZ = round(XYZRPY6[5] * factorRadToDeg)
+        joint_6 = round(XYZRPY6[6] * factorRadToDeg)
+        print(X, Y, Z, RX, RY, RZ)
+        piper.MotionCtrl_2(0x01, 0x02, speed * 3, 0x00)
+        piper.EndPoseCtrl(X, Y, Z, RX, RY, RZ)
+        piper.GripperCtrl(abs(joint_6), 1000, 0x01, 0)
+
+    # ------------------------------------------------------------------------
+    # NEW: LSPB trajectory streaming function
+    # ------------------------------------------------------------------------
+    def execute_lspb_trajectory(via_points, segment_durations, max_accel,
+                                dt=TRAJ_STREAM_DT):
+        """
+        Generate an LSPB trajectory through `via_points` and stream it to the Piper.
+
+        via_points:        np.array shape (n_waypoints, 6) — joint angles in radians
+        segment_durations: list of n_waypoints-1 durations in seconds
+        max_accel:         single rad/s² value, or list of 6 (one per joint)
+        dt:                streaming period in seconds (default 0.02 s = 50 Hz)
+        """
+        via = np.asarray(via_points, dtype=float)
+        n_joints = via.shape[1]
+        assert n_joints == 6, "Expected 6-joint trajectory"
+
+        # Normalise max_accel to a list of 6
+        if np.isscalar(max_accel):
+            max_accels = [float(max_accel)] * n_joints
+        else:
+            max_accels = list(max_accel)
+
+        # 1. Generate position trajectory for each joint
+        joint_trajs = []
+        t_array = None
+        for j in range(n_joints):
+            t_arr, theta, _, _, _ = lspb_via_points(
+                via[:, j], segment_durations, max_accels[j], dt=dt
+            )
+            joint_trajs.append(theta)
+            if t_array is None:
+                t_array = t_arr
+
+        n_samples = len(t_array)
+        print(f"  → Streaming {n_samples} samples over {t_array[-1]:.2f} s "
+              f"({1/dt:.0f} Hz)")
+
+        # 2. Configure robot for high-rate position streaming
+        #    move_mode = 0x01 (joint mode), speed = 100 (no internal throttling)
+        piper.MotionCtrl_2(0x01, 0x01, TRAJ_STREAM_SPEED, 0x00)
+
+        # 3. Stream each waypoint at the right time
+        loop_start = time.time()
+        for i in range(n_samples):
+            # Convert current joint targets from radians to robot units (0.001°)
+            j0 = round(joint_trajs[0][i] * factorRadToDeg)
+            j1 = round(joint_trajs[1][i] * factorRadToDeg)
+            j2 = round(joint_trajs[2][i] * factorRadToDeg)
+            j3 = round(joint_trajs[3][i] * factorRadToDeg)
+            j4 = round(joint_trajs[4][i] * factorRadToDeg)
+            j5 = round(joint_trajs[5][i] * factorRadToDeg)
+            piper.JointCtrl(j0, j1, j2, j3, j4, j5)
+
+            # Sleep until the next sample time
+            next_target = loop_start + t_array[i] + dt
+            sleep_time = next_target - time.time()
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+        elapsed = time.time() - loop_start
+        print(f"  → Trajectory complete in {elapsed:.2f} s")
+
+    # ========================================================================
+    # === MAIN LOOP ==========================================================
+    # ========================================================================
+    while True:
+        count += 1
+        log_now = False
+
+        if count == count_constant * 1:
+            print("Pos 1 -----------")
+            position = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            piper_joint_movement(position)
+            log_now = True
+
+        elif count == count_constant * 2:
+            print("Pos 2 -----------")
+            position = [0.0, 0.9139, -0.6589, 0.0, -0.1678, 0.0]   # Home Position
+            piper_joint_movement(position)
+            log_now = True
+        
+        elif count == count_constant * 3:
+            print("Pos 3 -----------")
+            position = [-1.5708,   2.0380,  -0.4455,  -0.0000,  -3.0760,  -0.0000]   # approach point 1
+            piper_joint_movement(position)
+            log_now = True
+
+        elif count == count_constant * 4:
+            print("Pos 4 -----------")
+            position = [-1.9462,   2.4440,  -0.5940,   1.1030,   2.0156,   1.3729]  # 60 degree angle forhåbentlig
+            piper_joint_movement(position)
+            log_now = True
+
+        # --------------------------------------------------------------------
+        #  TRAJ 1  —  Home BI holder → Grip A1 BI Holder via LSPB streaming
+        elif count == count_constant * 5:
+            print("TRAJ 1 -----------  (LSPB streaming)")
+
+            # Start = current pos (Pos 2),  end = next target (Pos 3)
+            pos_start = [-1.9462,   2.4440,  -0.5940,   1.1030,   2.0156,   1.3729] # 60 degrees
+            pos_end   = [-1.9462,   2.4440,  -0.5940,   1.1439,   1.5592,   3.1161] # 90 degrees
+
+            # If you want intermediate via-points (e.g. from dense Cartesian
+            # sampling + IK), insert them as extra rows here:
+            via_points = np.array([
+                pos_start,
+                pos_end,
+            ])
+
+            # One segment_duration per gap between via-points
+            segment_durations = [3.0]   # 3 s for the single A→B segment
+
+            max_accel = 3.14            # rad/s²  (matches your trajectory plan)
+
+            execute_lspb_trajectory(via_points, segment_durations, max_accel,
+                                    dt=TRAJ_STREAM_DT)
+
+            position = pos_end
+            log_now = True
+         # --------------------------------------------------------------------
+        elif count == count_constant * 6:
+            print("Pos 5 -----------")
+            position = [-1.5708,   2.0380,  -0.4455,  -0.0000,  -3.0760,  -0.0000]   # approach point 1
+            piper_joint_movement(position)
+            log_now = True
+
+        elif count == count_constant * 7:
+            print("Pos 6 -----------")
+            position = [0.0, 0.9139, -0.6589, 0.0, -0.1678, 0.0]   # Home Position
+            piper_joint_movement(position)
+            log_now = True
+
+
+        if log_now:
+            time.sleep(2)
+            tcp_pose = piper.GetArmEndPoseMsgs()
+            tcp_position = [
+                tcp_pose.end_pose.X_axis,
+                tcp_pose.end_pose.Y_axis,
+                tcp_pose.end_pose.Z_axis,
+                tcp_pose.end_pose.RX_axis,
+                tcp_pose.end_pose.RY_axis,
+                tcp_pose.end_pose.RZ_axis,
+            ]
+            log_to_csv(position, tcp_position)
+            print(f"Logget nr {log_counter - 1}")
+            time.sleep(1)
+
+        time.sleep(0.005)
