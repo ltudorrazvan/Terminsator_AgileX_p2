@@ -1,0 +1,143 @@
+import numpy as np
+import roboticstoolbox as rtb
+import spatialmath as sm
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.widgets import Slider
+
+
+# ── MDH Parameters ────────────────────────────────────────────────────────────
+# Columns: alpha_{i-1} [deg] | a_{i-1} [cm] | d_i [cm] | theta_offset [deg]
+
+MDH = [
+    #  alpha    a      d     theta_off
+    [    0,    0,     10,       0   ],  # Joint 1
+    [  -90,    10,     0,     -90   ],  # Joint 2
+    [    0,   15,     0,       -90   ],  # Joint 3
+    [    -90,   10,     10,       180   ],  # Joint 4
+    [  -90,    0,    0,      0   ],  # Joint 5
+    [   90,    0,   10,       0   ],  # Joint 6
+]
+
+# ── Build robot ───────────────────────────────────────────────────────────────
+
+links = [
+    rtb.RevoluteMDH(
+        alpha  = np.deg2rad(alpha),
+        a      = a / 100,
+        d      = d / 100,
+        offset = np.deg2rad(offset),
+    )
+    for alpha, a, d, offset in MDH
+]
+robot = rtb.DHRobot(links, name='Robot')
+N = len(links)
+
+
+def get_frames(q):
+    """T_0_i for i = 0 … N using roboticstoolbox."""
+    frames = [np.eye(4)]
+    T = sm.SE3()
+    for link, qi in zip(robot.links, q):
+        T = T * link.A(qi)
+        frames.append(T.A)
+    return frames
+
+
+# ── Drawing ───────────────────────────────────────────────────────────────────
+
+def draw(ax, q):
+    ax.cla()
+    frames    = get_frames(q)
+    positions = [T[:3, 3] for T in frames]
+
+    # Auto-scale
+    pts = np.array(positions)
+    c   = pts.mean(axis=0)
+    r   = max(np.abs(pts - c).max() * 1.8, 0.15)
+    ax.set_xlim(c[0]-r, c[0]+r)
+    ax.set_ylim(c[1]-r, c[1]+r)
+    ax.set_zlim(0, max(c[2]+r, 0.2))
+
+    # Floor grid
+    g = np.arange(-0.8, 0.85, 0.15)
+    for v in g:
+        ax.plot([v,v], [g[0],g[-1]], 0, color='#aaaaaa', lw=0.4, alpha=0.5)
+        ax.plot([g[0],g[-1]], [v,v], 0, color='#aaaaaa', lw=0.4, alpha=0.5)
+
+    # Links
+    for i in range(len(positions) - 1):
+        p0, p1 = positions[i], positions[i+1]
+        if np.linalg.norm(p1-p0) > 1e-4:
+            ax.plot([p0[0],p1[0]], [p0[1],p1[1]], [p0[2],p1[2]],
+                    'k-', linewidth=5, solid_capstyle='round', zorder=3)
+
+    # Joints & labelled axes
+    scale = r * 0.25
+    for i, T in enumerate(frames):
+        o  = T[:3, 3]
+        xi = T[:3, 0]   # x-axis of frame i
+        zi = T[:3, 2]   # z-axis of frame i
+
+        # Joint sphere
+        ax.scatter(*o, s=180, c='#666666', depthshade=True, zorder=4)
+
+        # z-axis  (blue)
+        ax.quiver(*o, *(zi*scale), color='#2980b9', linewidth=2,
+                  arrow_length_ratio=0.25, zorder=5)
+        ax.text(*(o + zi*scale*1.25), f'$z_{i}$',
+                color='#2980b9', fontsize=9, fontweight='bold',
+                ha='center', va='center')
+
+        # x-axis  (red)
+        ax.quiver(*o, *(xi*scale), color='#e74c3c', linewidth=2,
+                  arrow_length_ratio=0.25, zorder=5)
+        ax.text(*(o + xi*scale*1.25), f'$x_{i}$',
+                color='#e74c3c', fontsize=9, fontweight='bold',
+                ha='center', va='center')
+
+    # End-effector position
+    ee = frames[-1][:3, 3]
+    ax.set_title(f'EE:  x={ee[0]*100:.1f} cm   y={ee[1]*100:.1f} cm   z={ee[2]*100:.1f} cm',
+                 fontsize=10)
+
+    ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
+    ax.grid(False)
+
+
+# ── Figure layout ─────────────────────────────────────────────────────────────
+
+fig = plt.figure(figsize=(11, 8))
+fig.suptitle('Robot FK  —  Modified DH', fontsize=12, fontweight='bold')
+
+gs  = gridspec.GridSpec(2, 1, height_ratios=[5, 1], hspace=0.05)
+ax3 = fig.add_subplot(gs[0], projection='3d')
+
+# Sliders
+slider_ax = fig.add_subplot(gs[1])
+slider_ax.axis('off')
+
+sliders = []
+for i in range(N):
+    sax = fig.add_axes([0.12, 0.08 - i*0.012, 0.78, 0.009])
+    sl  = Slider(sax, f'q{i+1}', -180, 180, valinit=0, valstep=0.5,
+                 color='#2980b9')
+    sl.label.set_fontsize(8)
+    sliders.append(sl)
+
+# Reposition sliders vertically
+fig.subplots_adjust(bottom=0.02 + N*0.013)
+for i, sl in enumerate(sliders):
+    sl.ax.set_position([0.12, 0.03 + (N-1-i)*0.038, 0.78, 0.028])
+
+
+def update(_=None):
+    q = [np.deg2rad(sl.val) for sl in sliders]
+    draw(ax3, q)
+    fig.canvas.draw_idle()
+
+for sl in sliders:
+    sl.on_changed(update)
+
+update()
+plt.show()
